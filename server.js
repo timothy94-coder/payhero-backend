@@ -187,36 +187,21 @@ app.post("/api/runPrompt", async (req, res) => {
 
 
     const response = await fetch(
+  "https://backend.payhero.co.ke/api/v2/payments",
+  {
+    method: "POST",
 
-      "https://backend.payhero.co.ke/api/v2/payments",
+    headers: {
+      "Content-Type": "application/json",
+      "Authorization":
+        `Basic ${process.env.PAYHERO_BASIC_AUTH}`
+    },
 
-      {
+    body: JSON.stringify(payload),
 
-        method:"POST",
-
-
-        headers:{
-
-          "Content-Type":"application/json",
-
-          "Authorization":
-          `Basic ${process.env.PAYHERO_BASIC_AUTH}`
-
-        },
-
-
-        body:
-        JSON.stringify(payload),
-
-
-        signal:
-        controller.signal
-
-      }
-
-    );
-
-
+    signal: controller.signal
+  }
+);
 
     clearTimeout(timeout);
 
