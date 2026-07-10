@@ -131,7 +131,19 @@ body:JSON.stringify({
 
 
 
-    const data = await response.json();
+    const rawText = await response.text();
+
+let data;
+
+try {
+  data = JSON.parse(rawText);
+} catch {
+  data = {
+    raw: rawText
+  };
+}
+
+console.log("PayHero Response:", data);
 
 
 
@@ -142,21 +154,20 @@ body:JSON.stringify({
 
 
 
-    if(!response.ok){
+   if(!response.ok){
 
-      return res.status(500).json({
+console.log("PayHero HTTP Error:", response.status, data);
 
-        status:false,
+return res.status(500).json({
+  status:false,
+  message:
+    data.error_message ||
+    data.message ||
+    "PayHero failed",
+  data
+});
 
-        message:
-        data.message ||
-        "PayHero failed",
-
-        data
-
-      });
-
-    }
+}
 
 
 
