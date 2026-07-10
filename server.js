@@ -100,27 +100,27 @@ app.post("/api/runPrompt", async (req, res) => {
           `Basic ${process.env.PAYHERO_BASIC_AUTH}`
         },
 
-body:JSON.stringify({
+body: JSON.stringify({
 
   phone_number: formattedPhone,
 
-  amount:Number(amount),
+  amount: Number(amount),
 
-  channel_id:
-process.env.PAYHERO_CHANNEL_ID,
+  account_id: process.env.PAYHERO_ACCOUNT_ID,
+
+  channel_id: process.env.PAYHERO_CHANNEL_ID,
 
   provider: "m-pesa",
 
-  external_reference:
-  local_id,
+  external_reference: local_id,
 
   customer_name:
-  transaction_desc || "Customer",
+    transaction_desc || "Customer",
 
   description:
-  transaction_desc || "Payment"
+    transaction_desc || "Payment"
 
-}),
+})
 
         signal:controller.signal
       }
