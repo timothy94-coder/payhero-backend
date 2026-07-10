@@ -107,7 +107,7 @@ body:JSON.stringify({
   amount:Number(amount),
 
   channel_id:
-  process.env.PAYHERO_ACCOUNT_ID,
+process.env.PAYHERO_CHANNEL_ID,
 
   provider: "m-pesa",
 
