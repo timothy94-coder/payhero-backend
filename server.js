@@ -94,11 +94,13 @@ app.post("/api/runPrompt", async (req, res) => {
       {
         method:"POST",
 
-        headers:{
-          "Content-Type":"application/json",
-          "Authorization":
-          `Basic ${process.env.PAYHERO_BASIC_AUTH}`
-        },
+      headers: {
+  "Content-Type": "application/json",
+  "Accept": "application/json",
+  "Accept-Encoding": "identity",
+  "Authorization": `Basic ${process.env.PAYHERO_BASIC_AUTH}`
+},
+compress: false,
 
 
         body:JSON.stringify({
