@@ -29,6 +29,7 @@ app.get("/", (req, res) => {
 
 
 app.post("/api/runPrompt", async (req, res) => {
+
   console.log("Incoming payment:", req.body);
 
   const {
