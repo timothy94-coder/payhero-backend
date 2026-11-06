@@ -2,82 +2,125 @@
 import express from "express";
 import cors from "cors";
 import dotenv from "dotenv";
+import https from "node:https";
+import zlib from "node:zlib";
 
 dotenv.config();
 
 const app = express();
-
 const PORT = process.env.PORT || 5000;
 
-app.use(
-  cors({
-    origin: true,
-    credentials: true,
-  })
-);
+app.use(cors({
+  origin: true,
+  credentials: true
+}));
 
 app.use(express.json());
 
 const activeTransactions = new Map();
 const statusThrottle = new Map();
 
-const PAYHERO_URL = "https://backend.payhero.co.ke/api/v2";
+const PAYHERO_HOST = "backend.payhero.co.ke";
 
 
-// Check environment variables
-if (
-  !process.env.PAYHERO_BASIC_AUTH ||
-  !process.env.PAYHERO_ACCOUNT_ID
-) {
-  console.error("Missing PayHero environment variables");
-}
+// PAYHERO HTTPS REQUEST
+function payheroRequest(path, method = "GET", payload = null) {
+  return new Promise((resolve, reject) => {
 
+    const body = payload ? JSON.stringify(payload) : null;
 
-// Reusable PayHero request
-async function payheroFetch(url, options = {}) {
-  const controller = new AbortController();
+    const options = {
+      hostname: PAYHERO_HOST,
+      path,
+      method,
 
-  const timeout = setTimeout(() => {
-    controller.abort();
-  }, 90000);
-
-  try {
-    const response = await fetch(url, {
-      ...options,
-      signal: controller.signal,
       headers: {
-        Accept: "application/json",
-        Authorization: `Basic ${process.env.PAYHERO_BASIC_AUTH}`,
-        ...options.headers,
+        "Authorization": `Basic ${process.env.PAYHERO_BASIC_AUTH}`,
+        "Accept": "application/json",
+        "Accept-Encoding": "identity",
+        ...(body ? {
+          "Content-Type": "application/json",
+          "Content-Length": Buffer.byteLength(body)
+        } : {})
       },
-    });
 
-    const text = await response.text();
-
-    let data;
-
-    try {
-      data = JSON.parse(text);
-    } catch {
-      data = {
-        message: "PayHero returned a non-JSON response",
-        response: text.slice(0, 1000),
-      };
-    }
-
-    return {
-      ok: response.ok,
-      status: response.status,
-      data,
+      timeout: 90000
     };
 
-  } finally {
-    clearTimeout(timeout);
-  }
+    const request = https.request(options, (response) => {
+
+      const chunks = [];
+
+      response.on("data", chunk => chunks.push(chunk));
+
+      response.on("end", () => {
+
+        let raw = Buffer.concat(chunks);
+
+        const encoding = response.headers["content-encoding"];
+
+        try {
+
+          if (encoding === "gzip") {
+            raw = zlib.gunzipSync(raw);
+          } else if (encoding === "deflate") {
+            raw = zlib.inflateSync(raw);
+          } else if (encoding === "br") {
+            raw = zlib.brotliDecompressSync(raw);
+          }
+
+          const text = raw.toString("utf8");
+
+          let data;
+
+          try {
+            data = JSON.parse(text);
+          } catch {
+            data = {
+              message: "Invalid JSON response from PayHero",
+              response: text.slice(0, 1000)
+            };
+          }
+
+          console.log("PayHero HTTP:", response.statusCode);
+          console.log("PayHero encoding:", encoding || "none");
+
+          resolve({
+            ok: response.statusCode >= 200 &&
+                response.statusCode < 300,
+            status: response.statusCode,
+            data
+          });
+
+        } catch (err) {
+          reject(new Error(
+            `Could not decode PayHero response: ${err.message}`
+          ));
+        }
+
+      });
+
+      response.on("error", reject);
+
+    });
+
+    request.on("timeout", () => {
+      request.destroy(new Error("PayHero request timed out"));
+    });
+
+    request.on("error", reject);
+
+    if (body) {
+      request.write(body);
+    }
+
+    request.end();
+
+  });
 }
 
 
-// Health check
+// HEALTH CHECK
 app.get("/", (req, res) => {
   res.send("Backend alive (PayHero)");
 });
@@ -95,7 +138,6 @@ app.post("/api/runPrompt", async (req, res) => {
     transaction_desc
   } = req.body;
 
-  // Validate fields
   if (!phone || !amount || !local_id) {
     return res.status(400).json({
       status: false,
@@ -103,24 +145,21 @@ app.post("/api/runPrompt", async (req, res) => {
     });
   }
 
-  // Validate amount
   const paymentAmount = Number(amount);
 
-  if (
-    !Number.isFinite(paymentAmount) ||
-    paymentAmount <= 0
-  ) {
+  if (!Number.isFinite(paymentAmount) || paymentAmount <= 0) {
     return res.status(400).json({
       status: false,
       message: "Invalid payment amount"
     });
   }
 
-  // Normalize phone
   let formattedPhone = String(phone).replace(/\D/g, "");
 
-  if (formattedPhone.startsWith("07") ||
-      formattedPhone.startsWith("01")) {
+  if (
+    formattedPhone.startsWith("07") ||
+    formattedPhone.startsWith("01")
+  ) {
     formattedPhone = "254" + formattedPhone.slice(1);
   }
 
@@ -131,15 +170,16 @@ app.post("/api/runPrompt", async (req, res) => {
     });
   }
 
-  if (!process.env.PAYHERO_BASIC_AUTH ||
-      !process.env.PAYHERO_ACCOUNT_ID) {
+  if (
+    !process.env.PAYHERO_BASIC_AUTH ||
+    !process.env.PAYHERO_ACCOUNT_ID
+  ) {
     return res.status(500).json({
       status: false,
-      message: "Payment configuration missing"
+      message: "PayHero configuration missing"
     });
   }
 
-  // Prevent duplicate requests
   if (activeTransactions.has(local_id)) {
     return res.status(429).json({
       status: false,
@@ -162,18 +202,12 @@ app.post("/api/runPrompt", async (req, res) => {
 
     console.log("Sending STK request to PayHero");
 
-    const result = await payheroFetch(
-      `${PAYHERO_URL}/payments`,
-      {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json"
-        },
-        body: JSON.stringify(payload)
-      }
+    const result = await payheroRequest(
+      "/api/v2/payments",
+      "POST",
+      payload
     );
 
-    console.log("PayHero HTTP status:", result.status);
     console.log("PayHero response:", result.data);
 
     if (!result.ok) {
@@ -185,6 +219,7 @@ app.post("/api/runPrompt", async (req, res) => {
           "PayHero payment request failed",
         data: result.data
       });
+
     }
 
     return res.json({
@@ -197,11 +232,9 @@ app.post("/api/runPrompt", async (req, res) => {
 
     console.error("Payment error:", err);
 
-    return res.status(500).json({
+    return res.status(502).json({
       status: false,
-      message: err.name === "AbortError"
-        ? "PayHero request timed out"
-        : "Payment server error",
+      message: "Could not communicate with PayHero",
       error: err.message
     });
 
@@ -221,16 +254,11 @@ app.post("/api/payhero-callback", (req, res) => {
   const result = req.body;
 
   if (result.status === "success") {
-
     console.log("PAYMENT SUCCESS");
-
   } else {
-
     console.log("PAYMENT FAILED OR PENDING");
-
   }
 
-  // Acknowledge callback
   res.sendStatus(200);
 
 });
@@ -240,39 +268,32 @@ app.post("/api/payhero-callback", (req, res) => {
 app.get("/api/status/:id", async (req, res) => {
 
   const id = req.params.id;
-
   const now = Date.now();
 
   const last = statusThrottle.get(id);
 
   if (last && now - last < 5000) {
-
     return res.status(429).json({
       status: false,
       message: "Slow down"
     });
-
   }
 
   statusThrottle.set(id, now);
 
   try {
 
-    const result = await payheroFetch(
-      `${PAYHERO_URL}/transaction/${encodeURIComponent(id)}`,
-      {
-        method: "GET"
-      }
+    const result = await payheroRequest(
+      `/api/v2/transaction/${encodeURIComponent(id)}`,
+      "GET"
     );
 
     if (!result.ok) {
-
       return res.status(502).json({
         status: false,
         message: "PayHero status request failed",
         data: result.data
       });
-
     }
 
     return res.json(result.data);
@@ -281,7 +302,7 @@ app.get("/api/status/:id", async (req, res) => {
 
     console.error("Status check error:", err);
 
-    return res.status(500).json({
+    return res.status(502).json({
       status: false,
       message: "Status check failed",
       error: err.message
@@ -298,37 +319,21 @@ setInterval(() => {
   const now = Date.now();
 
   for (const [key, time] of activeTransactions.entries()) {
-
     if (now - time > 10 * 60 * 1000) {
       activeTransactions.delete(key);
     }
-
   }
 
   for (const [key, time] of statusThrottle.entries()) {
-
     if (now - time > 10 * 60 * 1000) {
       statusThrottle.delete(key);
     }
-
   }
 
 }, 60000);
 
 
-// SERVER ERRORS
-process.on("uncaughtException", (err) => {
-  console.error("Crash:", err);
-});
-
-process.on("unhandledRejection", (err) => {
-  console.error("Promise error:", err);
-});
-
-
-// START SERVER
+// SERVER START
 app.listen(PORT, () => {
-
   console.log(`PayHero backend running ${PORT}`);
-
 });
