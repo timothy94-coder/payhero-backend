@@ -30,6 +30,7 @@ const PAYHERO_HOST = "backend.payhero.co.ke";
 const requiredEnv = [
   "PAYHERO_BASIC_AUTH",
   "PAYHERO_CHANNEL_ID",
+  "PAYHERO_CALLBACK_URL",
 ];
 
 const missing = requiredEnv.filter(
@@ -188,176 +189,149 @@ app.get("/", (req, res) => {
    STK PUSH
 ===================================================== */
 
-app.post(
-  "/api/runPrompt",
-  async (req, res) => {
-    try {
-      console.log(
-        "Incoming payment:",
-        JSON.stringify(
-          req.body,
-          null,
-          2
-        )
-      );
+app.post("/api/runPrompt", async (req, res) => {
+  try {
+    console.log(
+      "Incoming payment:",
+      JSON.stringify(req.body, null, 2)
+    );
 
-      const {
-        phone,
-        amount,
-        local_id,
-        transaction_desc,
-      } = req.body;
+    const {
+      phone,
+      amount,
+      local_id,
+      transaction_desc,
+    } = req.body;
 
-      if (
-        !phone ||
-        !amount ||
-        !local_id
-      ) {
-        return res.status(400).json({
-          status: false,
-          message:
-            "Missing required fields",
-        });
-      }
-
-      const paymentAmount =
-        Number(amount);
-
-      if (
-        !Number.isFinite(
-          paymentAmount
-        ) ||
-        paymentAmount <= 0
-      ) {
-        return res.status(400).json({
-          status: false,
-          message:
-            "Invalid payment amount",
-        });
-      }
-
-      let formattedPhone =
-        String(phone).replace(
-          /\D/g,
-          ""
-        );
-
-      if (
-        formattedPhone.startsWith(
-          "07"
-        ) ||
-        formattedPhone.startsWith(
-          "01"
-        )
-      ) {
-        formattedPhone =
-          "254" +
-          formattedPhone.slice(1);
-      }
-
-      if (
-        !/^254[17]\d{8}$/.test(
-          formattedPhone
-        )
-      ) {
-        return res.status(400).json({
-          status: false,
-          message:
-            "Invalid Kenyan phone number",
-        });
-      }
-
-      if (
-        activeTransactions.has(
-          local_id
-        )
-      ) {
-        return res.status(429).json({
-          status: false,
-          message:
-            "Duplicate transaction blocked",
-        });
-      }
-
-      activeTransactions.set(
-        local_id,
-        Date.now()
-      );
-
-      const payload = {
-        phone_number:
-          formattedPhone,
-        amount: paymentAmount,
-
-        // IMPORTANT
-        channel_id:
-          process.env
-            .PAYHERO_CHANNEL_ID,
-
-        external_reference:
-          String(local_id),
-
-        customer_name:
-          transaction_desc ||
-          "Customer",
-
-        description:
-          transaction_desc ||
-          "Payment",
-      };
-
-      console.log(
-        "PAYHERO PAYLOAD:"
-      );
-
-      console.log(
-        JSON.stringify(
-          payload,
-          null,
-          2
-        )
-      );
-
-      const result =
-        await payheroRequest(
-          "/api/v2/payments",
-          "POST",
-          payload
-        );
-
-      if (!result.ok) {
-        return res.status(502).json({
-          status: false,
-          message:
-            "PayHero rejected request",
-          payhero_status:
-            result.status,
-          payhero_response:
-            result.data,
-        });
-      }
-
-      return res.json({
-        status: true,
-        message:
-          "STK Push accepted",
-        data: result.data,
+    if (!phone || !amount || !local_id) {
+      return res.status(400).json({
+        status: false,
+        message: "Missing required fields",
       });
-    } catch (err) {
-      console.error(
-        "Payment Error:",
-        err
+    }
+
+    const paymentAmount = Number(amount);
+
+    if (
+      !Number.isFinite(paymentAmount) ||
+      paymentAmount <= 0
+    ) {
+      return res.status(400).json({
+        status: false,
+        message: "Invalid payment amount",
+      });
+    }
+
+    let formattedPhone = String(phone)
+      .replace(/\D/g, "");
+
+    if (
+      formattedPhone.startsWith("07") ||
+      formattedPhone.startsWith("01")
+    ) {
+      formattedPhone =
+        "254" + formattedPhone.slice(1);
+    }
+
+    if (
+      !/^254[17]\d{8}$/.test(
+        formattedPhone
+      )
+    ) {
+      return res.status(400).json({
+        status: false,
+        message:
+          "Invalid Kenyan phone number",
+      });
+    }
+
+    if (activeTransactions.has(local_id)) {
+      return res.status(429).json({
+        status: false,
+        message:
+          "Duplicate transaction blocked",
+      });
+    }
+
+    activeTransactions.set(
+      local_id,
+      Date.now()
+    );
+
+    const payload = {
+      amount: paymentAmount,
+
+      phone_number: formattedPhone,
+
+      channel_id: Number(
+        process.env.PAYHERO_CHANNEL_ID
+      ),
+
+      provider: "m-pesa",
+
+      external_reference: String(
+        local_id
+      ),
+
+      customer_name:
+        transaction_desc ||
+        "Customer",
+
+      callback_url:
+        process.env.PAYHERO_CALLBACK_URL,
+    };
+
+    console.log(
+      "PAYHERO PAYLOAD:"
+    );
+
+    console.log(
+      JSON.stringify(
+        payload,
+        null,
+        2
+      )
+    );
+
+    const result =
+      await payheroRequest(
+        "/api/v2/payments",
+        "POST",
+        payload
       );
 
+    if (!result.ok) {
       return res.status(502).json({
         status: false,
         message:
-          "Could not communicate with PayHero",
-        error: err.message,
+          "PayHero rejected request",
+        payhero_status:
+          result.status,
+        payhero_response:
+          result.data,
       });
     }
+
+    return res.json({
+      status: true,
+      message:
+        "STK Push accepted",
+      data: result.data,
+    });
+  } catch (err) {
+    console.error(
+      "Payment Error:",
+      err
+    );
+
+    return res.status(502).json({
+      status: false,
+      message:
+        "Could not communicate with PayHero",
+      error: err.message,
+    });
   }
-);
+});
 
 /* =====================================================
    CALLBACK
@@ -369,6 +343,7 @@ app.post(
     console.log(
       "PAYHERO CALLBACK:"
     );
+
     console.log(
       JSON.stringify(
         req.body,
@@ -377,17 +352,15 @@ app.post(
       )
     );
 
-    const result = req.body;
-
     if (
-      result.status === "success"
+      req.body?.status === "success"
     ) {
       console.log(
-        "Payment Success"
+        "PAYMENT SUCCESS"
       );
     } else {
       console.log(
-        "Payment Pending/Failed"
+        "PAYMENT FAILED/PENDING"
       );
     }
 
@@ -403,9 +376,7 @@ app.get(
   "/api/status/:id",
   async (req, res) => {
     try {
-      const id =
-        req.params.id;
-
+      const id = req.params.id;
       const now = Date.now();
 
       const last =
@@ -421,10 +392,7 @@ app.get(
         });
       }
 
-      statusThrottle.set(
-        id,
-        now
-      );
+      statusThrottle.set(id, now);
 
       const result =
         await payheroRequest(
@@ -443,14 +411,14 @@ app.get(
         });
       }
 
-      res.json(result.data);
+      return res.json(result.data);
     } catch (err) {
       console.error(
         "Status check error:",
         err
       );
 
-      res.status(502).json({
+      return res.status(502).json({
         status: false,
         message:
           "Status check failed",
@@ -467,31 +435,21 @@ app.get(
 setInterval(() => {
   const now = Date.now();
 
-  for (const [
-    key,
-    time,
-  ] of activeTransactions.entries()) {
+  for (const [key, time] of activeTransactions) {
     if (
       now - time >
       10 * 60 * 1000
     ) {
-      activeTransactions.delete(
-        key
-      );
+      activeTransactions.delete(key);
     }
   }
 
-  for (const [
-    key,
-    time,
-  ] of statusThrottle.entries()) {
+  for (const [key, time] of statusThrottle) {
     if (
       now - time >
       10 * 60 * 1000
     ) {
-      statusThrottle.delete(
-        key
-      );
+      statusThrottle.delete(key);
     }
   }
 }, 60000);
@@ -505,16 +463,12 @@ app.listen(PORT, () => {
     `PayHero backend running on port ${PORT}`
   );
 
-  console.log("PayHero Config:");
   console.log({
     basicAuth:
-      !!process.env
-        .PAYHERO_BASIC_AUTH,
+      !!process.env.PAYHERO_BASIC_AUTH,
     channelId:
-      process.env
-        .PAYHERO_CHANNEL_ID,
-    accountId:
-      process.env
-        .PAYHERO_ACCOUNT_ID,
+      process.env.PAYHERO_CHANNEL_ID,
+    callbackUrl:
+      process.env.PAYHERO_CALLBACK_URL,
   });
 });
